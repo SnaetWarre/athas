@@ -1,4 +1,5 @@
 import { EDITOR_CONSTANTS } from "../config/constants";
+import { TextDocument } from "../model/text-document";
 
 export function splitLines(content: string): string[] {
   return content.split(/\r?\n/);
@@ -14,7 +15,7 @@ export function calculateLineHeight(
 }
 
 export function calculateLineOffset(lines: string[], lineIndex: number): number {
-  return lines.slice(0, lineIndex).reduce((acc, line) => acc + line.length + 1, 0);
+  return TextDocument.fromString(lines.join("\n")).offsetAt(lineIndex, 0);
 }
 
 export function isMarkdownFile(filePath: string): boolean {

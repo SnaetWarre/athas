@@ -1,34 +1,12 @@
 import { EDITOR_CONSTANTS } from "../config/constants";
+import { TextDocument } from "../model/text-document";
 import type { Position } from "../types/editor";
 
 /**
  * Calculate cursor position from character offset
  */
 export const calculateCursorPosition = (offset: number, lines: string[]): Position => {
-  let currentOffset = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const lineLength = lines[i].length + (i < lines.length - 1 ? 1 : 0); // +1 for newline
-    if (currentOffset + lineLength > offset) {
-      // Calculate column, but ensure it doesn't exceed the actual line content length
-      const column = Math.min(offset - currentOffset, lines[i].length);
-      return {
-        line: i,
-        column,
-        offset,
-      };
-    }
-    currentOffset += lineLength;
-  }
-
-  return {
-    line: lines.length - 1,
-    column: lines[lines.length - 1].length,
-    offset: lines.reduce(
-      (sum, line, idx) => sum + line.length + (idx < lines.length - 1 ? 1 : 0),
-      0,
-    ),
-  };
+  return TextDocument.fromString(lines.join("\n")).positionAt(offset);
 };
 
 /**
@@ -39,19 +17,7 @@ export const calculateOffsetFromPosition = (
   column: number,
   lines: string[],
 ): number => {
-  let offset = 0;
-
-  // Add lengths of all lines before the target line
-  for (let i = 0; i < line && i < lines.length; i++) {
-    offset += lines[i].length + 1; // +1 for newline
-  }
-
-  // Add the column position within the target line
-  if (line < lines.length) {
-    offset += Math.min(column, lines[line].length);
-  }
-
-  return offset;
+  return TextDocument.fromString(lines.join("\n")).offsetAt(line, column);
 };
 
 /**

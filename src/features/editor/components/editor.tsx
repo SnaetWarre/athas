@@ -41,6 +41,7 @@ import { getLanguageId, useTokenizer } from "../hooks/use-tokenizer";
 import { useViewportLines } from "../hooks/use-viewport-lines";
 import type { InlayHint } from "../lsp/use-inlay-hints";
 import { parseDiffAccordionLine } from "@/features/git/utils/diff-editor-content";
+import { TextDocument } from "../model/text-document";
 import { useBufferStore } from "../stores/buffer-store";
 import { useFoldStore } from "../stores/fold-store";
 import { useMinimapStore } from "../stores/minimap-store";
@@ -54,7 +55,7 @@ import {
 } from "../utils/fold-transformer";
 import { fileOpenBenchmark } from "../utils/file-open-benchmark";
 import { calculateLineHeight, calculateLineOffset, splitLines } from "../utils/lines";
-import { calculateCursorPosition, getAccurateCursorX } from "../utils/position";
+import { getAccurateCursorX } from "../utils/position";
 import { InlineDiff } from "./diff/inline-diff";
 import { Gutter } from "./gutter/gutter";
 import { InlineEditModelSelector } from "./inline-edit-model-selector";
@@ -145,7 +146,7 @@ export function Editor({
   const globalActiveBufferId = useBufferStore.use.activeBufferId();
   const bufferId = propBufferId ?? globalActiveBufferId;
   const buffers = useBufferStore.use.buffers();
-  const { updateBufferContent, updateBufferTokens } = useBufferStore.use.actions();
+  const { updateBufferContent, applyEditorEdit, updateBufferTokens } = useBufferStore.use.actions();
   const {
     setCursorPosition,
     setSelection,
@@ -315,13 +316,19 @@ export function Editor({
   }, [content, filePath, startMeasure, endMeasure]);
   const lines = foldTransform.hasActiveFolds ? foldTransform.virtualLines : actualLines;
   const displayContent = foldTransform.hasActiveFolds ? foldTransform.virtualContent : content;
+  const actualDocument = useMemo(() => {
+    return TextDocument.fromString(content, buffer?.version ?? 0);
+  }, [buffer?.version, content]);
+  const displayDocument = useMemo(() => {
+    if (!foldTransform.hasActiveFolds) return actualDocument;
+    return TextDocument.fromString(displayContent, actualDocument.version);
+  }, [actualDocument, displayContent, foldTransform.hasActiveFolds]);
 
   const lineHeight = useMemo(
     () => calculateLineHeight(fontSize, lineHeightMultiplier),
     [fontSize, lineHeightMultiplier],
   );
-  const shouldVirtualizeRendering =
-    lines.length >= EDITOR_CONSTANTS.RENDER_VIRTUALIZATION_THRESHOLD;
+  const shouldVirtualizeRendering = true;
   const useIncrementalTokenization = hasSyntaxHighlighting && shouldVirtualizeRendering;
 
   const {
@@ -340,6 +347,7 @@ export function Editor({
       languageIdOverride,
       incremental: useIncrementalTokenization,
       enabled: hasSyntaxHighlighting,
+      version: buffer?.version ?? 0,
     });
   const baseTokens = tokens.length > 0 ? tokens : (buffer?.tokens ?? []);
   const effectiveTokens = useMemo(() => {
@@ -507,8 +515,8 @@ export function Editor({
       if (!useGlobalEditorState) return;
 
       const selectionStart = inputRef.current.selectionStart;
-      const virtualLines = splitLines(newVirtualContent);
-      const position = calculateCursorPosition(selectionStart, virtualLines);
+      const nextDisplayDocument = TextDocument.fromString(newVirtualContent);
+      const position = nextDisplayDocument.positionAt(selectionStart);
 
       if (foldTransform.hasActiveFolds) {
         const actualLine =
@@ -539,6 +547,66 @@ export function Editor({
       onContentChange,
       onChange,
       readOnly,
+      useGlobalEditorState,
+    ],
+  );
+
+  const handleBeforeInput = useCallback(
+    (e: React.FormEvent<HTMLTextAreaElement>) => {
+      const nativeEvent = e.nativeEvent as InputEvent;
+      const textarea = inputRef.current;
+      if (
+        readOnly ||
+        !useGlobalEditorState ||
+        !bufferId ||
+        !textarea ||
+        foldTransform.hasActiveFolds ||
+        (multiCursorState?.cursors.length ?? 0) > 1 ||
+        nativeEvent.isComposing ||
+        nativeEvent.inputType !== "insertText" ||
+        typeof nativeEvent.data !== "string"
+      ) {
+        return;
+      }
+
+      e.preventDefault();
+      const result = applyEditorEdit(
+        bufferId,
+        {
+          startOffset: textarea.selectionStart,
+          endOffset: textarea.selectionEnd,
+          text: nativeEvent.data,
+        },
+        "keyboard",
+      );
+
+      if (!result) return;
+
+      const nextContent = result.document.toString();
+      textarea.value = nextContent;
+      textarea.selectionStart = result.newCursorOffset;
+      textarea.selectionEnd = result.newCursorOffset;
+      setEditorCursorPosition(result.document.positionAt(result.newCursorOffset));
+      setSelection(undefined);
+
+      if (onContentChange) {
+        onContentChange(nextContent);
+      } else {
+        onChange(nextContent);
+      }
+
+      useEditorUIStore.getState().actions.setLastInputTimestamp(Date.now());
+    },
+    [
+      applyEditorEdit,
+      bufferId,
+      foldTransform.hasActiveFolds,
+      multiCursorState?.cursors.length,
+      onChange,
+      onContentChange,
+      readOnly,
+      setEditorCursorPosition,
+      setSelection,
       useGlobalEditorState,
     ],
   );
@@ -597,11 +665,12 @@ export function Editor({
       isVisualModeActive && vimVisualSelection.end
         ? {
             ...vimVisualSelection.end,
-            offset:
-              calculateLineOffset(lines, vimVisualSelection.end.line) +
+            offset: displayDocument.offsetAt(
+              vimVisualSelection.end.line,
               vimVisualSelection.end.column,
+            ),
           }
-        : calculateCursorPosition(selectionStart, lines);
+        : displayDocument.positionAt(selectionStart);
 
     if (foldTransform.hasActiveFolds) {
       const actualLine = foldTransform.mapping.virtualToActual.get(position.line) ?? position.line;
@@ -616,10 +685,10 @@ export function Editor({
     }
 
     if (selectionStart !== selectionEnd) {
-      const startPos = calculateCursorPosition(selectionStart, lines);
-      const endPos = calculateCursorPosition(selectionEnd, lines);
+      const startPos = displayDocument.positionAt(selectionStart);
+      const endPos = displayDocument.positionAt(selectionEnd);
       const anchorOffset = Math.max(selectionStart, selectionEnd);
-      const anchorPos = calculateCursorPosition(anchorOffset, lines);
+      const anchorPos = displayDocument.positionAt(anchorOffset);
       inlineEditState.setInlineEditSelectionAnchor({
         line: anchorPos.line,
         column: anchorPos.column,
@@ -661,7 +730,7 @@ export function Editor({
     uiActions.setIsHovering(false);
   }, [
     bufferId,
-    lines,
+    displayDocument,
     actualLines,
     setEditorCursorPosition,
     setSelection,
@@ -781,15 +850,13 @@ export function Editor({
 
         const selectionStart = inputRef.current.selectionStart;
         const selectionEnd = inputRef.current.selectionEnd;
-        const contentLines = splitLines(content);
-
-        const clickedPosition = calculateCursorPosition(selectionStart, contentLines);
+        const clickedPosition = actualDocument.positionAt(selectionStart);
 
         const clickSelection =
           selectionStart !== selectionEnd
             ? {
-                start: calculateCursorPosition(selectionStart, contentLines),
-                end: calculateCursorPosition(selectionEnd, contentLines),
+                start: actualDocument.positionAt(selectionStart),
+                end: actualDocument.positionAt(selectionEnd),
               }
             : undefined;
 
@@ -812,7 +879,7 @@ export function Editor({
       }
 
       const selectionStart = inputRef.current.selectionStart;
-      const clickedPosition = calculateCursorPosition(selectionStart, lines);
+      const clickedPosition = displayDocument.positionAt(selectionStart);
       const clickedLine = lines[clickedPosition.line] || "";
       const accordionMeta = parseDiffAccordionLine(clickedLine);
 
@@ -843,7 +910,8 @@ export function Editor({
     },
     [
       bufferId,
-      content,
+      actualDocument,
+      displayDocument,
       multiCursorState,
       cursorPosition,
       enableMultiCursor,
@@ -890,7 +958,6 @@ export function Editor({
     bufferId,
     filePath,
     tabSize,
-    lines,
     cursorPosition,
     selection,
     multiCursorState,
@@ -1034,22 +1101,7 @@ export function Editor({
       return () => textarea.removeEventListener("wheel", handleWheel);
     }
 
-    if (typeof navigator !== "undefined" && navigator.userAgent.includes("Mac")) {
-      return;
-    }
-
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault();
-
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
-        textarea.scrollLeft += e.deltaX;
-      } else {
-        textarea.scrollTop += e.deltaY;
-      }
-    };
-
-    textarea.addEventListener("wheel", handleWheel, { passive: false });
-    return () => textarea.removeEventListener("wheel", handleWheel);
+    return;
   }, [scrollable]);
 
   // Track viewport height
@@ -1075,16 +1127,24 @@ export function Editor({
     };
   }, []);
 
-  // Tokenization scheduled via requestAnimationFrame
-  const tokenizeRafRef = useRef<number | null>(null);
+  // Tokenization is kept off the critical input frame.
+  const tokenizeIdleRef = useRef<{ id: number; type: "idle" | "timeout" } | null>(null);
   const tokenizeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const cancelScheduledTokenize = useCallback(() => {
+    if (!tokenizeIdleRef.current) return;
+    if (tokenizeIdleRef.current.type === "idle" && typeof cancelIdleCallback === "function") {
+      cancelIdleCallback(tokenizeIdleRef.current.id);
+    } else {
+      clearTimeout(tokenizeIdleRef.current.id);
+    }
+    tokenizeIdleRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!buffer?.content || !buffer?.path) return;
 
-    if (tokenizeRafRef.current !== null) {
-      cancelAnimationFrame(tokenizeRafRef.current);
-    }
+    cancelScheduledTokenize();
     if (tokenizeTimeoutRef.current !== null) {
       clearTimeout(tokenizeTimeoutRef.current);
     }
@@ -1127,15 +1187,36 @@ export function Editor({
       };
     }
 
-    tokenizeRafRef.current = requestAnimationFrame(() => {
-      tokenize(contentToTokenize, targetViewportRange);
-      tokenizeRafRef.current = null;
-    });
+    if (typeof requestIdleCallback === "function") {
+      tokenizeIdleRef.current = {
+        id: requestIdleCallback(
+          () => {
+            tokenize(contentToTokenize, targetViewportRange);
+            tokenizeIdleRef.current = null;
+          },
+          { timeout: 250 },
+        ),
+        type: "idle",
+      };
+
+      return () => {
+        cancelScheduledTokenize();
+        if (tokenizeTimeoutRef.current !== null) {
+          clearTimeout(tokenizeTimeoutRef.current);
+        }
+      };
+    }
+
+    tokenizeIdleRef.current = {
+      id: window.setTimeout(() => {
+        tokenize(contentToTokenize, targetViewportRange);
+        tokenizeIdleRef.current = null;
+      }, 80),
+      type: "timeout",
+    };
 
     return () => {
-      if (tokenizeRafRef.current !== null) {
-        cancelAnimationFrame(tokenizeRafRef.current);
-      }
+      cancelScheduledTokenize();
       if (tokenizeTimeoutRef.current !== null) {
         clearTimeout(tokenizeTimeoutRef.current);
       }
@@ -1153,6 +1234,7 @@ export function Editor({
     viewportRange?.endLine,
     isScrollingRef,
     useGlobalEditorState,
+    cancelScheduledTokenize,
   ]);
 
   const handleLineClick = useCallback(
@@ -1164,15 +1246,15 @@ export function Editor({
         return;
       }
 
-      const lineStart = calculateLineOffset(lines, lineIndex);
+      const lineStart = displayDocument.offsetAt(lineIndex, 0);
       const lineEnd = lineStart + lines[lineIndex].length;
 
       inputRef.current.selectionStart = lineStart;
       inputRef.current.selectionEnd = lineEnd;
       inputRef.current.focus();
 
-      const startPos = calculateCursorPosition(lineStart, lines);
-      const endPos = calculateCursorPosition(lineEnd, lines);
+      const startPos = displayDocument.positionAt(lineStart);
+      const endPos = displayDocument.positionAt(lineEnd);
 
       if (foldTransform.hasActiveFolds) {
         const actualStartLine =
@@ -1321,6 +1403,7 @@ export function Editor({
           content={displayContent}
           filePath={filePath}
           onInput={handleInput}
+          onBeforeInput={handleBeforeInput}
           onKeyDown={readOnly || !useGlobalEditorState ? undefined : handleKeyDown}
           onScroll={handleScroll}
           onSelect={useGlobalEditorState ? handleCursorChange : undefined}

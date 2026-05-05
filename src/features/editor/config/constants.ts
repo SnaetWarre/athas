@@ -11,9 +11,9 @@ export const EDITOR_CONSTANTS = {
   DEFAULT_VIEWPORT_HEIGHT: 600,
   VIEWPORT_OVERSCAN_RATIO: 0.75, // Increased for even smoother scrolling
   MIN_OVERSCAN_LINES: 10, // Increased minimum overscan
-  VIEWPORT_BUFFER_LINES: 50, // Extra lines to tokenize above/below viewport
+  VIEWPORT_BUFFER_LINES: 220, // Extra lines to tokenize above/below viewport
   SCROLL_UPDATE_THROTTLE: 100, // ms - throttle viewport updates during scroll
-  SIGNIFICANT_LINE_DIFF: 10, // Lines - threshold for significant range change
+  SIGNIFICANT_LINE_DIFF: 80, // Lines - threshold for significant range change
   VIEWPORT_OVERLAP_THRESHOLD: 50, // Percentage - consider significant if overlap is more than 50%
 
   // Editor padding (must match CSS variables in overlay-editor.css)

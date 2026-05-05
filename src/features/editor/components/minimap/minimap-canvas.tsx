@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
+import { TextDocument } from "../../model/text-document";
 import { useEditorSettingsStore } from "../../stores/settings-store";
 import type { Token } from "../../utils/html";
 
@@ -27,6 +28,9 @@ const CSS_VAR_MAP: Record<string, string> = {
   "token-attribute": "--syntax-attribute",
 };
 
+const MAX_TOKEN_COLORED_LINES = 20000;
+const MAX_TOKEN_COLORED_TOKENS = 100000;
+
 function resolveTokenColors(): Record<string, string> {
   const style = getComputedStyle(document.documentElement);
   const colors: Record<string, string> = {};
@@ -50,6 +54,9 @@ function MinimapCanvasComponent({
 }: MinimapCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const theme = useEditorSettingsStore.use.theme();
+  const documentModel = useMemo(() => TextDocument.fromString(content), [content]);
+  const lineOffsets = documentModel.getLineOffsets();
+  const lineCount = documentModel.lineCount();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -70,32 +77,50 @@ function MinimapCanvasComponent({
     // Clear canvas
     ctx.clearRect(0, 0, width, height);
 
-    const lines = content.split("\n");
     const scaledLineHeight = lineHeight * scale;
     const charWidth = 1.5;
+    const maxDrawableLines = Math.min(lineCount, Math.ceil(height / scaledLineHeight) + 1);
+    const useTokenColors =
+      lineCount < MAX_TOKEN_COLORED_LINES && tokens.length < MAX_TOKEN_COLORED_TOKENS;
 
-    // Create a map of tokens by line for efficient lookup
     const tokensByLine = new Map<number, Token[]>();
-    let currentOffset = 0;
+    if (useTokenColors) {
+      let tokenIndex = 0;
+      const sortedTokens = [...tokens].sort((a, b) => a.start - b.start);
 
-    for (let i = 0; i < lines.length; i++) {
-      const lineStart = currentOffset;
-      const lineEnd = currentOffset + lines[i].length;
-      const lineTokens: Token[] = [];
+      for (
+        let lineIndex = 0;
+        lineIndex < maxDrawableLines && tokenIndex < sortedTokens.length;
+        lineIndex++
+      ) {
+        const lineStart = lineOffsets[lineIndex] ?? 0;
+        const lineEnd =
+          lineIndex + 1 < lineOffsets.length
+            ? Math.max(lineStart, (lineOffsets[lineIndex + 1] ?? lineStart) - 1)
+            : content.length;
 
-      for (const token of tokens) {
-        if (token.start < lineEnd && token.end > lineStart) {
-          lineTokens.push(token);
+        while (tokenIndex < sortedTokens.length && sortedTokens[tokenIndex].end <= lineStart) {
+          tokenIndex++;
+        }
+
+        let scanIndex = tokenIndex;
+        while (scanIndex < sortedTokens.length && sortedTokens[scanIndex].start < lineEnd) {
+          const token = sortedTokens[scanIndex];
+          if (token.end > lineStart) {
+            const lineTokens = tokensByLine.get(lineIndex);
+            if (lineTokens) {
+              lineTokens.push(token);
+            } else {
+              tokensByLine.set(lineIndex, [token]);
+            }
+          }
+          scanIndex++;
         }
       }
-
-      tokensByLine.set(i, lineTokens);
-      currentOffset = lineEnd + 1; // +1 for newline
     }
 
-    // Draw each line
-    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
-      const line = lines[lineIndex];
+    for (let lineIndex = 0; lineIndex < maxDrawableLines; lineIndex++) {
+      const line = documentModel.lineAt(lineIndex);
       const y = lineIndex * scaledLineHeight;
 
       // Skip if outside visible area
@@ -103,11 +128,7 @@ function MinimapCanvasComponent({
       if (y + scaledLineHeight < 0) continue;
 
       const lineTokens = tokensByLine.get(lineIndex) || [];
-      let lineStart = 0;
-
-      for (let i = 0; i < lineIndex; i++) {
-        lineStart += lines[i].length + 1;
-      }
+      const lineStart = lineOffsets[lineIndex] ?? 0;
 
       // Draw tokens as colored rectangles
       if (lineTokens.length > 0) {
@@ -136,7 +157,18 @@ function MinimapCanvasComponent({
         ctx.globalAlpha = 1;
       }
     }
-  }, [content, tokens, width, height, scale, lineHeight, theme]);
+  }, [
+    content,
+    documentModel,
+    height,
+    lineCount,
+    lineHeight,
+    lineOffsets,
+    scale,
+    theme,
+    tokens,
+    width,
+  ]);
 
   return (
     <canvas

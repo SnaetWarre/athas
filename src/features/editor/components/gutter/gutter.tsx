@@ -33,9 +33,9 @@ interface GutterProps {
   lineNumberMap?: Array<number | null>;
 }
 
-const BUFFER_LINES = 20;
+const BUFFER_LINES = 220;
 const GUTTER_PADDING = 8;
-const VIEWPORT_UPDATE_THRESHOLD = 10;
+const VIEWPORT_UPDATE_THRESHOLD = 80;
 
 function GutterComponent({
   totalLines,
@@ -133,7 +133,7 @@ function GutterComponent({
 
       if (rafId === null) {
         rafId = requestAnimationFrame(() => {
-          content.style.transform = `translateY(-${scrollTopRef.current}px)`;
+          content.style.transform = `translate3d(0, -${scrollTopRef.current}px, 0)`;
           updateViewport(scrollTopRef.current);
           rafId = null;
         });
@@ -156,7 +156,6 @@ function GutterComponent({
         return;
       }
 
-      e.preventDefault();
       textarea.scrollTop += e.deltaY;
       textarea.scrollLeft += e.deltaX;
     };

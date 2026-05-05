@@ -10,6 +10,7 @@ import { useSettingsStore } from "@/features/settings/store";
 interface InputLayerProps {
   content: string;
   onInput: (content: string) => void;
+  onBeforeInput?: (e: React.FormEvent<HTMLTextAreaElement>) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onKeyUp?: () => void;
   onSelect?: () => void;
@@ -35,6 +36,7 @@ interface InputLayerProps {
 const InputLayerComponent = ({
   content,
   onInput,
+  onBeforeInput,
   onKeyDown,
   onKeyUp,
   onSelect,
@@ -55,6 +57,7 @@ const InputLayerComponent = ({
   textareaRef,
 }: InputLayerProps) => {
   const localRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingRef = useRef(false);
   const ref = textareaRef || localRef;
   const horizontalBufferCarousel = useSettingsStore((state) => state.settings.horizontalTabScroll);
 
@@ -69,7 +72,15 @@ const InputLayerComponent = ({
     <textarea
       ref={ref as React.RefObject<HTMLTextAreaElement>}
       defaultValue={content}
+      onBeforeInput={onBeforeInput}
       onChange={handleChange}
+      onCompositionStart={() => {
+        isComposingRef.current = true;
+      }}
+      onCompositionEnd={(e) => {
+        isComposingRef.current = false;
+        onInput(e.currentTarget.value);
+      }}
       onKeyDown={onKeyDown}
       onKeyUp={onKeyUp}
       onSelect={onSelect}
@@ -126,6 +137,7 @@ export const InputLayer = memo(InputLayerComponent, (prev, next) => {
     prev.customCaret === next.customCaret &&
     prev.textareaRef === next.textareaRef &&
     prev.onInput === next.onInput &&
+    prev.onBeforeInput === next.onBeforeInput &&
     prev.onKeyDown === next.onKeyDown &&
     prev.onScroll === next.onScroll &&
     prev.onSelect === next.onSelect &&

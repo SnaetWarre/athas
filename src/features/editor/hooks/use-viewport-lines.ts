@@ -18,7 +18,7 @@ interface UseViewportLinesOptions {
 }
 
 const LARGE_FILE_VIEWPORT_THRESHOLD = 20000;
-const LARGE_FILE_SIGNIFICANT_LINE_DIFF = 40;
+const LARGE_FILE_SIGNIFICANT_LINE_DIFF = 160;
 
 export function useViewportLines(options: UseViewportLinesOptions) {
   const { lineHeight, bufferLines = EDITOR_CONSTANTS.VIEWPORT_BUFFER_LINES } = options;

@@ -52,6 +52,7 @@ interface PaneContentBase {
 export interface EditorContent extends PaneContentBase {
   type: "editor";
   content: string;
+  version?: number;
   savedContent: string;
   isDirty: boolean;
   isVirtual: boolean;

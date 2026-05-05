@@ -4,6 +4,11 @@ import { immer } from "zustand/middleware/immer";
 import { createWithEqualityFn } from "zustand/traditional";
 import type { DatabaseType } from "@/features/database/models/provider.types";
 import { EDITOR_CONSTANTS } from "@/features/editor/config/constants";
+import {
+  TextDocument,
+  type EditResult,
+  type TextEdit,
+} from "@/features/editor/model/text-document";
 import { evictLeastRecentAutoClosableBuffer } from "@/features/editor/stores/buffer-eviction";
 import { createPaneContent } from "@/features/editor/stores/buffer-content-factory";
 import {
@@ -38,6 +43,8 @@ import {
   shouldStartLsp,
 } from "@/features/panes/types/pane-content";
 import { createSelectors } from "@/utils/zustand-selectors";
+
+const editorDocumentCache = new Map<string, TextDocument>();
 
 /** @deprecated Use `PaneContent` directly. Kept for backward compatibility. */
 export type Buffer = PaneContent;
@@ -133,6 +140,11 @@ interface BufferActions {
     markDirty?: boolean,
     diffData?: GitDiff | MultiFileDiff,
   ) => void;
+  applyEditorEdit: (
+    bufferId: string,
+    edit: TextEdit,
+    source: "keyboard" | "paste" | "programmatic",
+  ) => EditResult | null;
   updateBufferTokens: (bufferId: string, tokens: TokenEntry[]) => void;
   updateBufferLanguage: (bufferId: string, language: string) => void;
   markBufferDirty: (bufferId: string, isDirty: boolean) => void;
@@ -1117,6 +1129,11 @@ export const useBufferStore = createSelectors(
             if (!buf || !isEditableContent(buf)) return;
 
             buf.content = content;
+            if (buf.type === "editor") {
+              const document = TextDocument.fromString(content, (buf.version ?? 0) + 1);
+              editorDocumentCache.set(bufferId, document);
+              buf.version = document.version;
+            }
             if (diffData && buf.type === "diff") {
               buf.diffData = diffData;
             }
@@ -1134,6 +1151,34 @@ export const useBufferStore = createSelectors(
               buf.savedContent = content;
             }
           });
+        },
+
+        applyEditorEdit: (bufferId, edit) => {
+          let result: EditResult | null = null;
+
+          set((state) => {
+            const buffer = state.buffers.find((b) => b.id === bufferId);
+            if (!buffer || !isEditorContent(buffer)) return;
+
+            const cachedDocument = editorDocumentCache.get(bufferId);
+            const document =
+              cachedDocument && cachedDocument.toString() === buffer.content
+                ? cachedDocument
+                : TextDocument.fromString(buffer.content, buffer.version ?? 0);
+            result = document.applyEdit(edit);
+            editorDocumentCache.set(bufferId, result.document);
+            buffer.version = result.document.version;
+            buffer.content = result.document.toString();
+
+            if (!buffer.isVirtual) {
+              buffer.isDirty = buffer.content !== buffer.savedContent;
+              if (buffer.isPreview && buffer.isDirty) {
+                buffer.isPreview = false;
+              }
+            }
+          });
+
+          return result;
         },
 
         updateBufferTokens: (bufferId: string, tokens: TokenEntry[]) => {

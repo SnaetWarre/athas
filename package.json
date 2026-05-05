@@ -33,6 +33,7 @@
     "smoke:open:stable": "bun scripts/smoke-app.ts stable --open-only",
     "smoke:open:fast": "bun scripts/smoke-app.ts smoke --open-only",
     "pre-commit": "bun scripts/hooks/pre-commit.ts",
+    "editor:perf": "bun scripts/editor-perf.ts",
     "release:check": "bun scripts/release/pre-release-check.ts",
     "release:verify": "bun scripts/release/release-assets.mjs verify --repo athasdev/athas",
     "release:repair-plan": "bun scripts/release/release-assets.mjs repair-plan --repo athasdev/athas",

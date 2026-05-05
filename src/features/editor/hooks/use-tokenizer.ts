@@ -20,6 +20,7 @@ interface TokenizerOptions {
   languageIdOverride?: string;
   enabled?: boolean;
   incremental?: boolean;
+  version?: number;
 }
 
 interface TokenCache {
@@ -127,6 +128,7 @@ export function useTokenizer({
   languageIdOverride,
   enabled = true,
   incremental = true,
+  version = 0,
 }: TokenizerOptions) {
   const [tokens, setTokens] = useState<Token[]>([]);
   const [tokenizedContent, setTokenizedContent] = useState<string>("");
@@ -137,9 +139,12 @@ export function useTokenizer({
   });
   const textMetricsRef = useRef<TextMetricsCache | null>(null);
   const requestVersionRef = useRef(0);
+  const documentVersionRef = useRef(version);
   const backgroundSweepVersionRef = useRef(0);
   const backgroundSweepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { startMeasure, endMeasure } = usePerformanceMonitor("Tokenizer");
+
+  documentVersionRef.current = version;
 
   const retargetCachedTokens = useCallback((normalizedText: string) => {
     const cached = cacheRef.current;
@@ -190,6 +195,7 @@ export function useTokenizer({
       }
 
       const requestVersion = ++requestVersionRef.current;
+      const documentVersion = documentVersionRef.current;
       const normalizedText = normalizeLineEndings(text);
 
       retargetCachedTokens(normalizedText);
@@ -204,7 +210,12 @@ export function useTokenizer({
           mode: "full",
         });
 
-        if (requestVersion !== requestVersionRef.current) return;
+        if (
+          requestVersion !== requestVersionRef.current ||
+          documentVersion !== documentVersionRef.current
+        ) {
+          return;
+        }
 
         const newTokens = result.tokens.map(convertToToken);
         setTokens(newTokens);
@@ -214,12 +225,20 @@ export function useTokenizer({
           previousContent: result.normalizedText,
         };
       } catch (error) {
-        if (requestVersion !== requestVersionRef.current) return;
+        if (
+          requestVersion !== requestVersionRef.current ||
+          documentVersion !== documentVersionRef.current
+        ) {
+          return;
+        }
         logger.warn("Editor", "[Tokenizer] Full tokenization failed:", error);
         setTokens([]);
         setTokenizedContent("");
       } finally {
-        if (requestVersion === requestVersionRef.current) {
+        if (
+          requestVersion === requestVersionRef.current &&
+          documentVersion === documentVersionRef.current
+        ) {
           setLoading(false);
         }
         endMeasure(`tokenizeFull (len: ${normalizedText.length})`);
@@ -244,6 +263,7 @@ export function useTokenizer({
       if (!languageId) return;
 
       const requestVersion = ++requestVersionRef.current;
+      const documentVersion = documentVersionRef.current;
       const { normalizedText, lineOffsets, lineCount } = getTextMetrics(text);
       const shouldScheduleBackgroundFullSweep =
         lineCount <= BACKGROUND_FULL_TOKENIZE_LINE_THRESHOLD &&
@@ -274,7 +294,12 @@ export function useTokenizer({
           },
         });
 
-        if (requestVersion !== requestVersionRef.current) return;
+        if (
+          requestVersion !== requestVersionRef.current ||
+          documentVersion !== documentVersionRef.current
+        ) {
+          return;
+        }
 
         const rangeTokens = result.tokens.map(convertToToken);
         const rangeStartOffset = lineOffsets[clampedStartLine] || 0;
@@ -305,6 +330,7 @@ export function useTokenizer({
           backgroundSweepTimerRef.current = globalThis.setTimeout(() => {
             const runFullSweep = () => {
               if (requestVersionRef.current !== requestVersion) return;
+              if (documentVersionRef.current !== documentVersion) return;
               if (backgroundSweepVersionRef.current !== sweepVersion) return;
               void tokenizeFull(result.normalizedText);
             };
@@ -320,10 +346,18 @@ export function useTokenizer({
           }, BACKGROUND_FULL_TOKENIZE_DELAY_MS);
         }
       } catch (error) {
-        if (requestVersion !== requestVersionRef.current) return;
+        if (
+          requestVersion !== requestVersionRef.current ||
+          documentVersion !== documentVersionRef.current
+        ) {
+          return;
+        }
         logger.warn("Editor", "[Tokenizer] Range tokenization failed:", error);
       } finally {
-        if (requestVersion === requestVersionRef.current) {
+        if (
+          requestVersion === requestVersionRef.current &&
+          documentVersion === documentVersionRef.current
+        ) {
           setLoading(false);
         }
         endMeasure("tokenizeRangeInternal");

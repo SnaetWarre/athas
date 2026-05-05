@@ -1,4 +1,4 @@
-import { type RefObject, useCallback } from "react";
+import { type RefObject, useCallback, useMemo } from "react";
 import { editorAPI } from "../extensions/api";
 import { useInlineEditToolbarStore } from "@/features/editor/stores/inline-edit-toolbar-store";
 import { useEditorAppStore } from "../stores/editor-app-store";
@@ -14,9 +14,8 @@ import { getEffectiveKeybindings } from "@/features/keymaps/utils/effective-keym
 import { matchKeybinding } from "@/features/keymaps/utils/matcher";
 import { keymapRegistry } from "@/features/keymaps/utils/registry";
 import type { Decoration, MultiCursorState, Position, Range } from "../types/editor";
-import { calculateLineOffset, splitLines } from "../utils/lines";
+import { TextDocument } from "../model/text-document";
 import { applyMultiCursorBackspace, applyMultiCursorEdit } from "../utils/multi-cursor";
-import { calculateCursorPosition } from "../utils/position";
 import { getLanguageId } from "./use-tokenizer";
 
 const AUTO_PAIRS: Record<string, string> = {
@@ -160,7 +159,6 @@ interface UseEditorKeyDownOptions {
   bufferId: string | null;
   filePath: string | undefined;
   tabSize: number;
-  lines: string[];
   cursorPosition: Position;
   selection: Range | undefined;
   multiCursorState: MultiCursorState | null;
@@ -190,7 +188,6 @@ export function useEditorKeyDown({
   bufferId,
   filePath,
   tabSize,
-  lines,
   cursorPosition,
   selection,
   multiCursorState,
@@ -215,6 +212,7 @@ export function useEditorKeyDown({
 }: UseEditorKeyDownOptions) {
   const inlineEditToolbarActions = useInlineEditToolbarStore.use.actions();
   const lspActions = useLspStore.use.actions();
+  const documentModel = useMemo(() => TextDocument.fromString(content), [content]);
 
   return useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -310,25 +308,25 @@ export function useEditorKeyDown({
         if (e.key === "]") {
           const nextChange = changedLines.find((line) => line > currentLine);
           if (nextChange !== undefined) {
-            const lineStart = calculateLineOffset(lines, nextChange);
+            const lineStart = documentModel.offsetAt(nextChange, 0);
             if (inputRef.current) {
               inputRef.current.selectionStart = lineStart;
               inputRef.current.selectionEnd = lineStart;
               inputRef.current.focus();
             }
-            setCursorPosition(calculateCursorPosition(lineStart, lines));
+            setCursorPosition(documentModel.positionAt(lineStart));
           }
         } else {
           const prevChanges = changedLines.filter((line) => line < currentLine);
           if (prevChanges.length > 0) {
             const prevChange = prevChanges[prevChanges.length - 1];
-            const lineStart = calculateLineOffset(lines, prevChange);
+            const lineStart = documentModel.offsetAt(prevChange, 0);
             if (inputRef.current) {
               inputRef.current.selectionStart = lineStart;
               inputRef.current.selectionEnd = lineStart;
               inputRef.current.focus();
             }
-            setCursorPosition(calculateCursorPosition(lineStart, lines));
+            setCursorPosition(documentModel.positionAt(lineStart));
           }
         }
         return;
@@ -356,20 +354,14 @@ export function useEditorKeyDown({
       if (!isAltGraph && e.shiftKey && e.altKey && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
         e.preventDefault();
 
-        const contentLines = splitLines(content);
         const targetLine =
           e.key === "ArrowDown" ? cursorPosition.line + 1 : cursorPosition.line - 1;
 
-        if (targetLine < 0 || targetLine >= contentLines.length) return;
+        if (targetLine < 0 || targetLine >= documentModel.lineCount()) return;
 
-        const targetLineText = contentLines[targetLine] || "";
+        const targetLineText = documentModel.lineAt(targetLine);
         const targetColumn = Math.min(cursorPosition.column, targetLineText.length);
-
-        let offset = 0;
-        for (let i = 0; i < targetLine; i++) {
-          offset += (contentLines[i]?.length || 0) + 1;
-        }
-        offset += targetColumn;
+        const offset = documentModel.offsetAt(targetLine, targetColumn);
 
         const newPosition: Position = {
           line: targetLine,
@@ -395,8 +387,7 @@ export function useEditorKeyDown({
         if (selectionStart !== selectionEnd) {
           searchText = content.substring(selectionStart, selectionEnd);
         } else {
-          const contentLines = splitLines(content);
-          const lineText = contentLines[cursorPosition.line] || "";
+          const lineText = documentModel.lineAt(cursorPosition.line);
           const wordRegex = /[a-zA-Z0-9_]+/g;
           let match: RegExpExecArray | null;
 
@@ -406,10 +397,7 @@ export function useEditorKeyDown({
             const wordEnd = match.index + match[0].length;
             if (cursorPosition.column >= wordStart && cursorPosition.column <= wordEnd) {
               searchText = match[0];
-              let lineOffset = 0;
-              for (let i = 0; i < cursorPosition.line; i++) {
-                lineOffset += (contentLines[i]?.length || 0) + 1;
-              }
+              const lineOffset = documentModel.offsetAt(cursorPosition.line, 0);
               selectionStart = lineOffset + wordStart;
               selectionEnd = lineOffset + wordEnd;
               break;
@@ -423,18 +411,9 @@ export function useEditorKeyDown({
         const searchIndex = content.indexOf(searchText, selectionEnd);
         if (searchIndex === -1) return;
 
-        const contentLines = splitLines(content);
-        let line = 0;
-        let currentOffset = 0;
-        for (let i = 0; i < contentLines.length; i++) {
-          const lineLen = contentLines[i].length + 1;
-          if (currentOffset + lineLen > searchIndex) {
-            line = i;
-            break;
-          }
-          currentOffset += lineLen;
-        }
-        const column = searchIndex - currentOffset;
+        const searchPosition = documentModel.positionAt(searchIndex);
+        const line = searchPosition.line;
+        const column = searchPosition.column;
         const endColumn = column + searchText.length;
 
         const newPosition: Position = {
@@ -768,6 +747,7 @@ export function useEditorKeyDown({
       setIsLspCompletionVisible,
       setAutocompleteCompletion,
       lspActions,
+      documentModel,
       multiCursorState,
       clearSecondaryCursors,
       content,
@@ -777,7 +757,6 @@ export function useEditorKeyDown({
       cursorPosition.line,
       cursorPosition.column,
       setCursorPosition,
-      lines,
       selection,
       inlineEditToolbarActions,
       inlineEditVisible,
